@@ -24,17 +24,6 @@ metadata:
   name: consul-tests
 ---
 apiVersion: v1
-data:
-  gossip-key: TGZtdUpJNXdrSExJYlBDbWlYck1lTGl1
-kind: Secret
-metadata:
-  labels:
-    component: consul-consul
-    release: consul
-  name: consul-gossip-key
-type: Opaque
----
-apiVersion: v1
 kind: Service
 metadata:
   labels:
@@ -128,7 +117,7 @@ spec:
       - command:
         - /bin/sh
         - -ec
-        - "set -o pipefail\n\nif [ -z \"$POD_IP\"  ]; then\n  POD_IP=$(hostname -i)\nfi\nFQDN_SUFFIX=\"${STATEFULSET_NAME}.${STATEFULSET_NAMESPACE}.svc\"\nNODE_NAME=\"$(hostname -s).${FQDN_SUFFIX}\"\nif [ -e /etc/consul/secrets/gossip-key ]; then\n  echo \"{\\\"encrypt\\\": \\\"$(base64 /etc/consul/secrets/gossip-key)\\\"}\" > /etc/consul/encrypt.json\n  GOSSIP_KEY=\"-config-file /etc/consul/encrypt.json\"\nfi\n\nJOIN_PEERS=\"\"\nJOIN_PEERS=\"\"\nfor i in $( seq 0 $((${INITIAL_CLUSTER_SIZE} - 1)) ); do\n  JOIN_PEERS=\"${JOIN_PEERS}${JOIN_PEERS:+ }${STATEFULSET_NAME}-${i}.${FQDN_SUFFIX}\"\ndone\n\nJOIN_PEERS=$( printf \"%s\\n\" $JOIN_PEERS | sort | uniq )\n\n# Require multiple loops in the case of unstable DNS resolution\nSUCCESS_LOOPS=5\nwhile [ \"$SUCCESS_LOOPS\" -gt 0 ]; do\n  ALL_READY=true\n  JOIN_LAN=\"\"\n  for THIS_PEER in $JOIN_PEERS; do\n      # Make sure we can resolve hostname and ping IP\n      if PEER_IP=\"$(ping -c 1 $THIS_PEER | awk -F'[()]' '/PING/{print $2}')\" && [ \"$PEER_IP\" != \"\" ]; then \n        if [ \"${PEER_IP}\" != \"${POD_IP}\" ]; then\n          JOIN_LAN=\"${JOIN_LAN}${JOIN_LAN:+ } -retry-join=$THIS_PEER\"\n        fi\n      else\n        ALL_READY=false\n        break\n      fi\n  done\n  if $ALL_READY; then\n    SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))\n    echo \"LAN peers appear ready, $SUCCESS_LOOPS verifications left\"\n  else\n    echo \"Waiting for LAN peer $THIS_PEER...\"\n  fi\n  sleep 1s\ndone\n\n\nWAN_PEERS=\"\"\n\nJOIN_WAN=\"\"\nSUCCESS_LOOPS=5\nwhile [ \"$WAN_PEERS\" != \"\" ] && [ \"$SUCCESS_LOOPS\" -gt 0 ]; do\n  ALL_READY=true\n  JOIN_WAN=\"\"\n  for THIS_PEER in $WAN_PEERS; do\n      # We don't care if we can ping the peer, but we do care that we can get its IP\n      if PEER_IP=\"$( ( ping -c 1 $THIS_PEER || true ) | awk -F'[()]' '/PING/{print $2}')\" && [ \"$PEER_IP\" != \"\" ]; then \n        if [ \"${PEER_IP}\" != \"${POD_IP}\" ]; then\n          JOIN_WAN=\"${JOIN_WAN}${JOIN_WAN:+ } -retry-join-wan=$THIS_PEER\"\n        fi\n      else\n        ALL_READY=false\n        break\n      fi\n  done\n  if $ALL_READY; then\n    SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))\n    echo \"WAN peers appear ready, $SUCCESS_LOOPS verifications left\"\n  else\n    echo \"Waiting for WAN peer $THIS_PEER...\"\n  fi\n  sleep 1s\ndone\n\nexec /bin/consul agent \\\n  -ui \\\n  -domain=consul \\\n  -data-dir=/var/lib/consul \\\n  -server \\\n  -bootstrap-expect=$( echo \"$JOIN_PEERS\" | wc -w ) \\\n  -disable-keyring-file \\\n  -bind=0.0.0.0 \\\n  -advertise=${POD_IP} \\\n  ${JOIN_LAN} \\\n  ${JOIN_WAN} \\\n  ${GOSSIP_KEY} \\\n  -client=0.0.0.0 \\\n  -dns-port=${DNSPORT} \\\n  -http-port=6666\n"
+        - "set -o pipefail\n\nif [ -z \"$POD_IP\"  ]; then\n  POD_IP=$(hostname -i)\nfi\nFQDN_SUFFIX=\"${STATEFULSET_NAME}.${STATEFULSET_NAMESPACE}.svc\"\nNODE_NAME=\"$(hostname -s).${FQDN_SUFFIX}\"\n\nJOIN_PEERS=\"\"\nJOIN_PEERS=\"\"\nfor i in $( seq 0 $((${INITIAL_CLUSTER_SIZE} - 1)) ); do\n  JOIN_PEERS=\"${JOIN_PEERS}${JOIN_PEERS:+ }${STATEFULSET_NAME}-${i}.${FQDN_SUFFIX}\"\ndone\n\nJOIN_PEERS=$( printf \"%s\\n\" $JOIN_PEERS | sort | uniq )\n\n# Require multiple loops in the case of unstable DNS resolution\nSUCCESS_LOOPS=5\nwhile [ \"$SUCCESS_LOOPS\" -gt 0 ]; do\n  ALL_READY=true\n  JOIN_LAN=\"\"\n  for THIS_PEER in $JOIN_PEERS; do\n      # Make sure we can resolve hostname and ping IP\n      if PEER_IP=\"$(ping -c 1 $THIS_PEER | awk -F'[()]' '/PING/{print $2}')\" && [ \"$PEER_IP\" != \"\" ]; then \n        if [ \"${PEER_IP}\" != \"${POD_IP}\" ]; then\n          JOIN_LAN=\"${JOIN_LAN}${JOIN_LAN:+ } -retry-join=$THIS_PEER\"\n        fi\n      else\n        ALL_READY=false\n        break\n      fi\n  done\n  if $ALL_READY; then\n    SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))\n    echo \"LAN peers appear ready, $SUCCESS_LOOPS verifications left\"\n  else\n    echo \"Waiting for LAN peer $THIS_PEER...\"\n  fi\n  sleep 1s\ndone\n\n\nWAN_PEERS=\"\"\n\nJOIN_WAN=\"\"\nSUCCESS_LOOPS=5\nwhile [ \"$WAN_PEERS\" != \"\" ] && [ \"$SUCCESS_LOOPS\" -gt 0 ]; do\n  ALL_READY=true\n  JOIN_WAN=\"\"\n  for THIS_PEER in $WAN_PEERS; do\n      # We don't care if we can ping the peer, but we do care that we can get its IP\n      if PEER_IP=\"$( ( ping -c 1 $THIS_PEER || true ) | awk -F'[()]' '/PING/{print $2}')\" && [ \"$PEER_IP\" != \"\" ]; then \n        if [ \"${PEER_IP}\" != \"${POD_IP}\" ]; then\n          JOIN_WAN=\"${JOIN_WAN}${JOIN_WAN:+ } -retry-join-wan=$THIS_PEER\"\n        fi\n      else\n        ALL_READY=false\n        break\n      fi\n  done\n  if $ALL_READY; then\n    SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))\n    echo \"WAN peers appear ready, $SUCCESS_LOOPS verifications left\"\n  else\n    echo \"Waiting for WAN peer $THIS_PEER...\"\n  fi\n  sleep 1s\ndone\n\nexec /bin/consul agent \\\n  -ui \\\n  -domain=consul \\\n  -data-dir=/var/lib/consul \\\n  -server \\\n  -bootstrap-expect=$( echo \"$JOIN_PEERS\" | wc -w ) \\\n  -disable-keyring-file \\\n  -bind=0.0.0.0 \\\n  -advertise=${POD_IP} \\\n  ${JOIN_LAN} \\\n  ${JOIN_WAN} \\\n  -client=0.0.0.0 \\\n  -dns-port=${DNSPORT} \\\n  -http-port=6666\n"
         env:
         - name: INITIAL_CLUSTER_SIZE
           value: "3"
@@ -222,7 +211,7 @@ kind: Pod
 metadata:
   annotations:
     helm.sh/hook: test-success
-  name: consul-ui-test-tx3au
+  name: consul-ui-test-hvfo6
 spec:
   containers:
   - command:
