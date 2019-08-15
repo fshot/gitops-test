@@ -25,7 +25,7 @@ metadata:
 ---
 apiVersion: v1
 data:
-  gossip-key: eWU4eHpQdnRLYmFXWEFZem5lQ1g4Rkg1
+  gossip-key: NXV2UzFYWW1rR09mYVRMeURoRWtoRW5r
 kind: Secret
 metadata:
   labels:
@@ -43,6 +43,8 @@ metadata:
   name: consul-ui
 spec:
   ports:
+  - name: http
+    port: 9999
   - name: http
     port: 8500
   selector:
@@ -220,7 +222,7 @@ kind: Pod
 metadata:
   annotations:
     helm.sh/hook: test-success
-  name: consul-ui-test-hwa1x
+  name: consul-ui-test-v3w6k
 spec:
   containers:
   - command:
