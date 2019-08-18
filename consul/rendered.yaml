@@ -95,7 +95,7 @@ spec:
   template:
     metadata:
       labels:
-        chart: consul-3.8.0
+        chart: consul-3.8.1
         component: consul-consul
         heritage: Tiller
         release: consul
@@ -211,7 +211,7 @@ kind: Pod
 metadata:
   annotations:
     helm.sh/hook: test-success
-  name: consul-ui-test-hvfo6
+  name: consul-ui-test-xr1ir
 spec:
   containers:
   - command:
