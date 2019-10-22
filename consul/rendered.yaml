@@ -1,0 +1,331 @@
+apiVersion: v1
+data:
+  run.sh: |-
+    @test "Testing Consul cluster has quorum" {
+      for i in {0..2}; do
+        for n in {1..30}; do
+          if [ `kubectl exec consul-$i consul members --namespace=default | grep server | wc -l` -ge "3" ]; then
+            echo "consul-$i OK. consul members returning at least 3 records."
+            break
+          else
+            echo "consul-$i ERROR. consul members returning less than 3 records."
+          fi
+
+          if [ "$n" -ge "30" ]; then
+            echo "Failed $n times to get members from consul-$i"
+            exit 1
+          fi
+          sleep 10
+        done
+      done
+    }
+kind: ConfigMap
+metadata:
+  name: consul-tests
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    component: consul-consul
+    release: consul
+  name: consul-ui
+spec:
+  ports:
+  - name: http
+    port: 9999
+  - name: http
+    port: 6666
+  selector:
+    component: consul-consul
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+  labels:
+    component: consul-consul
+    release: consul
+  name: consul
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 6666
+  - name: rpc
+    port: 7777
+  - name: serflan-tcp
+    port: 8888
+    protocol: TCP
+  - name: serflan-udp
+    port: 9999
+    protocol: UDP
+  - name: serfwan-tcp
+    port: 8302
+    protocol: TCP
+  - name: serfwan-udp
+    port: 8302
+    protocol: UDP
+  - name: server
+    port: 8300
+  - name: consuldns-tcp
+    port: 8600
+  - name: consuldns-udp
+    port: 8600
+    protocol: UDP
+  selector:
+    component: consul-consul
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    component: consul-consul
+    release: consul
+  name: consul
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      component: consul-consul
+      release: consul
+  serviceName: consul
+  template:
+    metadata:
+      labels:
+        chart: consul-3.9.2
+        component: consul-consul
+        heritage: Tiller
+        release: consul
+      name: consul
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: component
+                  operator: In
+                  values:
+                  - consul-consul
+              topologyKey: kubernetes.io/hostname
+            weight: 1
+      containers:
+      - command:
+        - /bin/sh
+        - -ec
+        - |
+          set -o pipefail
+
+          if [ -z "$POD_IP"  ]; then
+            POD_IP=$(hostname -i)
+          fi
+          FQDN_SUFFIX="${STATEFULSET_NAME}.${STATEFULSET_NAMESPACE}.svc"
+          NODE_NAME="$(hostname -s).${FQDN_SUFFIX}"
+
+          JOIN_PEERS=""
+          JOIN_PEERS=""
+          for i in $( seq 0 $((${INITIAL_CLUSTER_SIZE} - 1)) ); do
+            JOIN_PEERS="${JOIN_PEERS}${JOIN_PEERS:+ }${STATEFULSET_NAME}-${i}.${FQDN_SUFFIX}"
+          done
+
+          JOIN_PEERS=$( printf "%s\n" $JOIN_PEERS | sort | uniq )
+
+          # Require multiple loops in the case of unstable DNS resolution
+          SUCCESS_LOOPS=5
+          while [ "$SUCCESS_LOOPS" -gt 0 ]; do
+            ALL_READY=true
+            JOIN_LAN=""
+            for THIS_PEER in $JOIN_PEERS; do
+                # Make sure we can resolve hostname and ping IP
+                if PEER_IP="$(ping -c 1 $THIS_PEER | awk -F'[()]' '/PING/{print $2}')" && [ "$PEER_IP" != "" ]; then
+                  if [ "${PEER_IP}" != "${POD_IP}" ]; then
+                    JOIN_LAN="${JOIN_LAN}${JOIN_LAN:+ } -retry-join=$THIS_PEER"
+                  fi
+                else
+                  ALL_READY=false
+                  break
+                fi
+            done
+            if $ALL_READY; then
+              SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))
+              echo "LAN peers appear ready, $SUCCESS_LOOPS verifications left"
+            else
+              echo "Waiting for LAN peer $THIS_PEER..."
+            fi
+            sleep 1s
+          done
+
+
+          WAN_PEERS=""
+
+          JOIN_WAN=""
+          SUCCESS_LOOPS=5
+          while [ "$WAN_PEERS" != "" ] && [ "$SUCCESS_LOOPS" -gt 0 ]; do
+            ALL_READY=true
+            JOIN_WAN=""
+            for THIS_PEER in $WAN_PEERS; do
+                # We don't care if we can ping the peer, but we do care that we can get its IP
+                if PEER_IP="$( ( ping -c 1 $THIS_PEER || true ) | awk -F'[()]' '/PING/{print $2}')" && [ "$PEER_IP" != "" ]; then
+                  if [ "${PEER_IP}" != "${POD_IP}" ]; then
+                    JOIN_WAN="${JOIN_WAN}${JOIN_WAN:+ } -retry-join-wan=$THIS_PEER"
+                  fi
+                else
+                  ALL_READY=false
+                  break
+                fi
+            done
+            if $ALL_READY; then
+              SUCCESS_LOOPS=$(( SUCCESS_LOOPS - 1 ))
+              echo "WAN peers appear ready, $SUCCESS_LOOPS verifications left"
+            else
+              echo "Waiting for WAN peer $THIS_PEER..."
+            fi
+            sleep 1s
+          done
+
+          exec /bin/consul agent \
+            -ui \
+            -domain=consul \
+            -data-dir=/var/lib/consul \
+            -server \
+            -bootstrap-expect=$( echo "$JOIN_PEERS" | wc -w ) \
+            -disable-keyring-file \
+            -bind=0.0.0.0 \
+            -advertise=${POD_IP} \
+            ${JOIN_LAN} \
+            ${JOIN_WAN} \
+            -client=0.0.0.0 \
+            -dns-port=${DNSPORT} \
+            -http-port=6666
+        env:
+        - name: INITIAL_CLUSTER_SIZE
+          value: "3"
+        - name: STATEFULSET_NAME
+          value: consul
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: STATEFULSET_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DNSPORT
+          value: "8600"
+        image: consul:1.5.3
+        imagePullPolicy: Always
+        livenessProbe:
+          exec:
+            command:
+            - consul
+            - members
+            - -http-addr=http://127.0.0.1:6666
+          initialDelaySeconds: 300
+          timeoutSeconds: 5
+        name: consul
+        ports:
+        - containerPort: 6666
+          name: http
+        - containerPort: 7777
+          name: rpc
+        - containerPort: 8888
+          name: serflan-tcp
+          protocol: TCP
+        - containerPort: 9999
+          name: serflan-udp
+          protocol: UDP
+        - containerPort: 8302
+          name: serfwan-tcp
+          protocol: TCP
+        - containerPort: 8302
+          name: serfwan-udp
+          protocol: UDP
+        - containerPort: 8300
+          name: server
+        - containerPort: 8600
+          name: consuldns-tcp
+        - containerPort: 8600
+          name: consuldns-udp
+          protocol: UDP
+        resources: {}
+        volumeMounts:
+        - mountPath: /var/lib/consul
+          name: datadir
+        - mountPath: /etc/consul/secrets
+          name: gossip-key
+          readOnly: true
+      securityContext:
+        fsGroup: 1000
+      volumes:
+      - name: gossip-key
+        secret:
+          secretName: consul-gossip-key
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    component: consul-consul
+    release: consul
+  name: consul-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      component: consul-consul
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    helm.sh/hook: test-success
+  name: consul-ui-test-kzp1t
+spec:
+  containers:
+  - command:
+    - /tools/bats/bats
+    - -t
+    - /tests/run.sh
+    image: lachlanevenson/k8s-kubectl:v1.4.8-bash
+    name: consul-ui-test
+    volumeMounts:
+    - mountPath: /tests
+      name: tests
+      readOnly: true
+    - mountPath: /tools
+      name: tools
+  initContainers:
+  - command:
+    - bash
+    - -c
+    - |
+      set -ex
+      # copy bats to tools dir
+      cp -R /usr/local/libexec/ /tools/bats/
+    image: dduportal/bats:0.4.0
+    name: test-framework
+    volumeMounts:
+    - mountPath: /tools
+      name: tools
+  restartPolicy: Never
+  volumes:
+  - configMap:
+      name: consul-tests
+    name: tests
+  - emptyDir: {}
+    name: tools
